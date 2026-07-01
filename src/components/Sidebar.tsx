@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   MousePointer, 
   Square, 
@@ -6,55 +6,70 @@ import {
   Triangle, 
   PenTool, 
   Smile,
-  Star,
-  Heart,
-  Check,
-  X,
-  Search,
-  Home,
-  Settings,
-  User,
-  Bell,
-  Camera,
-  Mail
+  Layout // container icon
 } from 'lucide-react';
-import { ActiveTool } from '../types';
+import { useCanvas } from '../context/CanvasContext';
+import { CanvasElement } from '../types';
+import { ALL_ICONS, getIconComponent } from '../utils/lucideIcons';
 
-interface SidebarProps {
-  activeTool: ActiveTool;
-  setActiveTool: (tool: ActiveTool) => void;
-  onAddIcon: (iconName: string) => void;
-}
+export const Sidebar: React.FC = () => {
+  const {
+    activeTool,
+    setActiveTool,
+    addElement,
+    setSelectedId
+  } = useCanvas();
 
-// Icon component lookup map for UI rendering
-const UI_ICONS: Record<string, React.ComponentType<any>> = {
-  Star,
-  Heart,
-  Smile,
-  Check,
-  X,
-  Search,
-  Home,
-  Settings,
-  User,
-  Bell,
-  Camera,
-  Mail
-};
+  const [searchQuery, setSearchQuery] = useState('');
 
-export const Sidebar: React.FC<SidebarProps> = ({ 
-  activeTool, 
-  setActiveTool, 
-  onAddIcon 
-}) => {
+  const filteredIcons = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) {
+      return [
+        'Star', 'Heart', 'Smile', 'Check', 'X', 'Search', 'Home', 'Settings', 
+        'User', 'Bell', 'Camera', 'Mail', 'ThumbsUp', 'MapPin', 'Calendar', 
+        'Trash2', 'Plus', 'Play', 'Info', 'HelpCircle', 'Folder', 'Copy', 
+        'Share2', 'LogOut', 'Activity', 'AlertTriangle', 'Book', 'Briefcase',
+        'Cloud', 'CreditCard', 'Download', 'Eye', 'Gift', 'Image',
+        'Lock', 'MessageSquare', 'Music', 'Phone', 'Send', 'ShoppingCart',
+        'Sliders', 'Smartphone', 'Sun', 'Video', 'Volume2', 'Wifi', 'Zap'
+      ];
+    }
+    return ALL_ICONS.filter(name => name.toLowerCase().includes(query)).slice(0, 48);
+  }, [searchQuery]);
   const tools = [
     { id: 'select', label: 'Select & Move', icon: MousePointer, description: 'Drag, resize and style shapes' },
+    { id: 'container', label: 'Flex Container', icon: Layout, description: 'Draw a flexible parent layout wrapper' },
     { id: 'rect', label: 'Rectangle', icon: Square, description: 'Draw a rectangle element' },
     { id: 'circle', label: 'Circle', icon: Circle, description: 'Draw a circular element' },
     { id: 'triangle', label: 'Triangle', icon: Triangle, description: 'Draw a triangular element' },
     { id: 'draw', label: 'Pen Tool', icon: PenTool, description: 'Freehand sketch custom paths' },
     { id: 'icon', label: 'Add Icon', icon: Smile, description: 'Insert standard UI icons' },
   ] as const;
+
+  const handleAddIcon = (iconName: string) => {
+    const newIcon: CanvasElement = {
+      id: `icon-${Date.now()}`,
+      type: 'icon',
+      x: { base: 60 },
+      y: { base: 60 },
+      width: { base: 48 },
+      height: { base: 48 },
+      position: { base: 'absolute' },
+      iconName,
+      styles: {
+        fill: '#fbbf24', // Amber icon color default
+        borderColor: '#d97706',
+        borderWidth: 1.5,
+        opacity: 1.0,
+        padding: { top: 0, right: 0, bottom: 0, left: 0 },
+        margin: { top: 0, right: 0, bottom: 0, left: 0 }
+      }
+    };
+    addElement(newIcon);
+    setSelectedId(newIcon.id);
+    setActiveTool('select');
+  };
 
   return (
     <div className="w-full bg-slate-900 border-r border-slate-800 flex flex-col h-full select-none">
@@ -73,7 +88,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Toolbar List */}
       <div className="flex-1 overflow-y-auto p-4 space-y-2">
-        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 mb-2">Tools</p>
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 mb-2">Workspace Tools</p>
         {tools.map((tool) => {
           const IconComponent = tool.icon;
           const isActive = activeTool === tool.id;
@@ -90,8 +105,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <IconComponent className={`w-5 h-5 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200'}`} />
               <div className="flex flex-col min-w-0">
-                <span className="text-xs font-medium tracking-wide">{tool.label}</span>
-                <span className={`text-[10px] truncate ${isActive ? 'text-indigo-200' : 'text-slate-500'}`}>
+                <span className="text-xs font-semibold tracking-wide">{tool.label}</span>
+                <span className={`text-[9px] truncate ${isActive ? 'text-indigo-200' : 'text-slate-500'}`}>
                   {tool.description}
                 </span>
               </div>
@@ -101,21 +116,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {/* Custom Icon Picker Sub-Panel */}
         {activeTool === 'icon' && (
-          <div className="mt-6 pt-4 border-t border-slate-800/80 animate-fadeIn">
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 mb-3">
-              Click Icon to Add
-            </p>
-            <div className="grid grid-cols-4 gap-2 p-1 bg-slate-950/60 rounded-xl border border-slate-800/40">
-              {Object.entries(UI_ICONS).map(([name, Component]) => (
-                <button
-                  key={name}
-                  onClick={() => onAddIcon(name)}
-                  className="aspect-square flex items-center justify-center rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-950/20 transition-all group"
-                  title={name}
-                >
-                  <Component className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                </button>
-              ))}
+          <div className="mt-6 pt-4 border-t border-slate-800/80 animate-fadeIn flex flex-col gap-3">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 mb-1.5">
+                Search & Add Icon
+              </p>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search 1,000+ icons..."
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500/80 focus:ring-1 focus:ring-indigo-500/30 rounded-lg pl-3 pr-8 py-2 text-xs text-slate-200 outline-none transition-all placeholder-slate-600"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-[16px] leading-none px-1"
+                    title="Clear search"
+                  >
+                    &times;
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="max-h-[220px] overflow-y-auto pr-1 flex flex-col gap-2">
+              {filteredIcons.length > 0 ? (
+                <div className="grid grid-cols-4 gap-2 p-1 bg-slate-950/60 rounded-xl border border-slate-800/40">
+                  {filteredIcons.map((name) => {
+                    const Component = getIconComponent(name);
+                    return (
+                      <button
+                        key={name}
+                        onClick={() => handleAddIcon(name)}
+                        className="aspect-square flex items-center justify-center rounded-lg bg-slate-900 border border-slate-800 text-slate-400 hover:text-indigo-400 hover:border-indigo-500/50 hover:bg-indigo-950/20 transition-all group"
+                        title={name}
+                      >
+                        <Component className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-6 text-xs text-slate-600 border border-dashed border-slate-800 rounded-lg">
+                  No icons found.
+                </div>
+              )}
             </div>
           </div>
         )}

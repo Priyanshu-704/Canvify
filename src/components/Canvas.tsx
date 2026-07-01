@@ -1,33 +1,33 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { CanvasElement, ActiveTool, StyleSettings } from '../types';
-import { ICONS_DATA } from '../utils/iconsData';
+import { useCanvas } from '../context/CanvasContext';
+import { CanvasElement } from './CanvasElement';
+import { BoxModelOverlay } from './BoxModelOverlay';
+import { CanvasElement as ElementType } from '../types';
 
-interface CanvasProps {
-  elements: CanvasElement[];
-  selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
-  activeTool: ActiveTool;
-  setActiveTool: (tool: ActiveTool) => void;
-  styleSettings: StyleSettings;
-  onUpdateElement: (id: string, updates: Partial<CanvasElement>) => void;
-  onAddElement: (element: CanvasElement) => void;
-  onDeleteElement: (id: string) => void;
-}
+export const Canvas: React.FC = () => {
+  const {
+    elements,
+    selectedId,
+    setSelectedId,
+    activeTool,
+    setActiveTool,
+    viewportMode,
+    pan,
+    setPan,
+    zoom,
+    setZoom,
+    boxModelActive,
+    styleSettings,
+    updateElement,
+    addElement,
+    deleteElement,
+    nestElement
+  } = useCanvas();
 
-export const Canvas: React.FC<CanvasProps> = ({
-  elements,
-  selectedId,
-  setSelectedId,
-  activeTool,
-  setActiveTool,
-  styleSettings,
-  onUpdateElement,
-  onAddElement,
-  onDeleteElement
-}) => {
+  const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  
-  // Interactive pointer state
+
+  // Dragging, drawing, and resizing states
   const [isPointerDown, setIsPointerDown] = useState(false);
   const [dragStart, setDragStart] = useState<{
     startX: number;
@@ -37,222 +37,409 @@ export const Canvas: React.FC<CanvasProps> = ({
     origW: number;
     origH: number;
   } | null>(null);
-  
+
+  const [activeAction, setActiveAction] = useState<'none' | 'drag' | 'resize' | 'create' | 'draw' | 'pan'>('none');
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
-  const [activeAction, setActiveAction] = useState<'none' | 'drag' | 'resize' | 'create' | 'draw'>('none');
-  
-  // Custom draw points for Pen Tool
   const [drawPoints, setDrawPoints] = useState<{ x: number; y: number }[]>([]);
-  
-  // Shape creation coordinates
   const [createStart, setCreateStart] = useState<{ x: number; y: number } | null>(null);
-  const [tempCreateElement, setTempCreateElement] = useState<CanvasElement | null>(null);
+  const [tempCreateElement, setTempCreateElement] = useState<ElementType | null>(null);
+  const [hoverParentId, setHoverParentId] = useState<string | null>(null);
 
-  const selectedElement = elements.find((el) => el.id === selectedId) || null;
+  // Dynamic selection overlay rectangle
+  const [selectRect, setSelectRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  // Keyboard nudge & delete listeners
+  // 1. Follow selection overlay bounding box
+  useEffect(() => {
+    if (!selectedId || !canvasRef.current) {
+      setSelectRect(null);
+      return;
+    }
+
+    const updateRect = () => {
+      const elDom = document.getElementById(selectedId);
+      const canvasDom = canvasRef.current;
+      if (elDom && canvasDom) {
+        const elRect = elDom.getBoundingClientRect();
+        const canvasRect = canvasDom.getBoundingClientRect();
+        setSelectRect({
+          x: (elRect.left - canvasRect.left) / zoom,
+          y: (elRect.top - canvasRect.top) / zoom,
+          w: elRect.width / zoom,
+          h: elRect.height / zoom
+        });
+      }
+    };
+
+    updateRect();
+
+    let active = true;
+    const loop = () => {
+      if (!active) return;
+      updateRect();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+
+    return () => {
+      active = false;
+    };
+  }, [selectedId, elements, zoom, pan]);
+
+  // Keyboard nudging / deletion
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!selectedId) return;
       
-      // Prevent scrolling on space / arrow key navigation
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(e.key)) {
-        // Only run if not typing in inputs (Monaco has its own listener)
-        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
-          return;
-        }
+      const isInput = document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA';
+      if (isInput) return;
+
+      const keys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Delete', 'Backspace'];
+      if (keys.includes(e.key)) {
         e.preventDefault();
       }
 
+      const el = findElementById(elements, selectedId);
+      if (!el) return;
+
       const step = e.shiftKey ? 10 : 1;
-      const element = elements.find(el => el.id === selectedId);
-      if (!element) return;
+      
+      // Resolve geometry values
+      const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+        if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+        if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+        return val.base;
+      };
+
+      const x = resolve(el.x);
+      const y = resolve(el.y);
+
+      const setResponsive = <T,>(valObj: { base: T; md?: T; lg?: T }, val: T) => {
+        if (viewportMode === 'desktop') valObj.lg = val;
+        else if (viewportMode === 'tablet') valObj.md = val;
+        else valObj.base = val;
+      };
 
       if (e.key === 'ArrowLeft') {
-        onUpdateElement(selectedId, { x: element.x - step });
+        const newX = { ...el.x };
+        setResponsive(newX, x - step);
+        updateElement(selectedId, { x: newX });
       } else if (e.key === 'ArrowRight') {
-        onUpdateElement(selectedId, { x: element.x + step });
+        const newX = { ...el.x };
+        setResponsive(newX, x + step);
+        updateElement(selectedId, { x: newX });
       } else if (e.key === 'ArrowUp') {
-        onUpdateElement(selectedId, { y: element.y - step });
+        const newY = { ...el.y };
+        setResponsive(newY, y - step);
+        updateElement(selectedId, { y: newY });
       } else if (e.key === 'ArrowDown') {
-        onUpdateElement(selectedId, { y: element.y + step });
+        const newY = { ...el.y };
+        setResponsive(newY, y + step);
+        updateElement(selectedId, { y: newY });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        onDeleteElement(selectedId);
+        deleteElement(selectedId);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedId, elements, onUpdateElement, onDeleteElement]);
+  }, [selectedId, elements, viewportMode]);
 
-  // Translate screen mouse coordinates to canvas coordinates
+  const findElementById = (tree: ElementType[], id: string): ElementType | null => {
+    for (const el of tree) {
+      if (el.id === id) return el;
+      if (el.children) {
+        const res = findElementById(el.children, id);
+        if (res) return res;
+      }
+    }
+    return null;
+  };
+
+  // Helper to check if a potential container is a child/descendant of target
+  const isDescendant = (parent: ElementType, childId: string): boolean => {
+    if (!parent.children) return false;
+    if (parent.children.some((c) => c.id === childId)) return true;
+    return parent.children.some((c) => isDescendant(c, childId));
+  };
+
+  // Coordinates translation projection
   const getCanvasCoords = (e: React.PointerEvent) => {
     if (!canvasRef.current) return { x: 0, y: 0 };
     const rect = canvasRef.current.getBoundingClientRect();
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      x: (e.clientX - rect.left) / zoom,
+      y: (e.clientY - rect.top) / zoom
     };
   };
 
+  // Trackpad / Wheel Pan & Zoom Gesture Listener
+  const handleWheel = (e: React.WheelEvent) => {
+    e.preventDefault();
+    if (e.ctrlKey) {
+      // Math coordinates relative to zoom origins
+      const zoomFactor = 1.08;
+      const nextZoom = e.deltaY < 0 ? zoom * zoomFactor : zoom / zoomFactor;
+      const boundedZoom = Math.max(0.15, Math.min(4.0, nextZoom));
+      
+      setZoom(boundedZoom);
+    } else {
+      // Pan
+      setPan((prev) => ({
+        x: prev.x - e.deltaX,
+        y: prev.y - e.deltaY
+      }));
+    }
+  };
+
+  // Pointer Down operations
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!canvasRef.current) return;
-    
-    // Set pointer capture to lock events to this element
     canvasRef.current.setPointerCapture(e.pointerId);
-    
+
     const coords = getCanvasCoords(e);
     setIsPointerDown(true);
 
+    // Canvas panning triggers: middle click, or left-click background/empty space in select mode
+    const target = e.target as HTMLElement;
+    const isCanvasBg = target.classList.contains('canvas-grid') || target.id === 'canvas-wrapper';
+    const isMiddleClick = e.button === 1;
+    const shouldPanBg = isCanvasBg && activeTool === 'select';
+
+    if (isMiddleClick || shouldPanBg || (activeTool === 'draw' && e.shiftKey)) {
+      setActiveAction('pan');
+      setDragStart({
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: pan.x,
+        origY: pan.y,
+        origW: 0,
+        origH: 0
+      });
+      return;
+    }
+
     if (activeTool === 'select') {
-      // 1. Check if user clicked a resize handle
-      const target = e.target as HTMLElement;
       const handle = target.getAttribute('data-handle');
-      
-      if (handle && selectedElement) {
-        setResizeHandle(handle);
-        setActiveAction('resize');
-        setDragStart({
-          startX: e.clientX,
-          startY: e.clientY,
-          origX: selectedElement.x,
-          origY: selectedElement.y,
-          origW: selectedElement.width,
-          origH: selectedElement.height
-        });
+      if (handle && selectedId) {
+        // Start Resize Action
+        const el = findElementById(elements, selectedId);
+        if (el) {
+          const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+            if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+            if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+            return val.base;
+          };
+          
+          setActiveAction('resize');
+          setResizeHandle(handle);
+          setDragStart({
+            startX: e.clientX,
+            startY: e.clientY,
+            origX: resolve(el.x),
+            origY: resolve(el.y),
+            origW: typeof resolve(el.width) === 'number' ? (resolve(el.width) as number) : 100,
+            origH: typeof resolve(el.height) === 'number' ? (resolve(el.height) as number) : 100
+          });
+        }
         e.stopPropagation();
         return;
       }
 
-      // 2. Check if user clicked an element
-      const elementId = target.closest('[data-element-id]')?.getAttribute('data-element-id');
-      if (elementId) {
-        const clickedEl = elements.find((el) => el.id === elementId);
-        if (clickedEl) {
+      // Check if user clicked an element
+      const elementId = target.closest('[data-id]')?.getAttribute('data-id');
+      if (elementId && elementId !== 'canvas-wrapper') {
+        const el = findElementById(elements, elementId);
+        if (el) {
+          const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+            if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+            if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+            return val.base;
+          };
+
           setSelectedId(elementId);
           setActiveAction('drag');
           setDragStart({
             startX: e.clientX,
             startY: e.clientY,
-            origX: clickedEl.x,
-            origY: clickedEl.y,
-            origW: clickedEl.width,
-            origH: clickedEl.height
+            origX: resolve(el.x),
+            origY: resolve(el.y),
+            origW: typeof resolve(el.width) === 'number' ? (resolve(el.width) as number) : 100,
+            origH: typeof resolve(el.height) === 'number' ? (resolve(el.height) as number) : 100
           });
-          e.stopPropagation();
-          return;
         }
+        e.stopPropagation();
+        return;
       }
 
-      // 3. Clicked empty space
+      // Empty click clears selection
       setSelectedId(null);
       setActiveAction('none');
     } else if (activeTool === 'draw') {
-      // Start Pen Drawing
       setActiveAction('draw');
       setDrawPoints([coords]);
-    } else if (['rect', 'circle', 'triangle'].includes(activeTool)) {
-      // Start Shape Drag Creation
+    } else if (['rect', 'circle', 'triangle', 'container'].includes(activeTool)) {
       setActiveAction('create');
       setCreateStart(coords);
-      
-      const newTempEl: CanvasElement = {
+
+      const newTemp: ElementType = {
         id: 'temp-element',
         type: activeTool as any,
-        x: coords.x,
-        y: coords.y,
-        width: 1,
-        height: 1,
-        fill: styleSettings.fill,
-        borderWidth: styleSettings.borderWidth,
-        borderColor: styleSettings.borderColor,
-        borderRadius: activeTool === 'rect' ? styleSettings.borderRadius : undefined,
-        opacity: styleSettings.opacity
+        x: { base: coords.x },
+        y: { base: coords.y },
+        width: { base: 1 },
+        height: { base: 1 },
+        position: { base: 'absolute' },
+        styles: {
+          fill: styleSettings.fill,
+          borderColor: styleSettings.borderColor,
+          borderWidth: styleSettings.borderWidth,
+          borderRadius: activeTool === 'rect' || activeTool === 'container' ? styleSettings.borderRadius : undefined,
+          opacity: styleSettings.opacity,
+          padding: { top: 0, right: 0, bottom: 0, left: 0 },
+          margin: { top: 0, right: 0, bottom: 0, left: 0 }
+        },
+        children: activeTool === 'container' ? [] : undefined
       };
-      setTempCreateElement(newTempEl);
+      setTempCreateElement(newTemp);
     }
   };
 
+  // Pointer Move operations
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isPointerDown) return;
     const coords = getCanvasCoords(e);
 
-    if (activeAction === 'drag' && selectedId && dragStart) {
-      const deltaX = e.clientX - dragStart.startX;
-      const deltaY = e.clientY - dragStart.startY;
-      onUpdateElement(selectedId, {
-        x: dragStart.origX + deltaX,
-        y: dragStart.origY + deltaY
+    if (activeAction === 'pan' && dragStart) {
+      const dx = e.clientX - dragStart.startX;
+      const dy = e.clientY - dragStart.startY;
+      setPan({
+        x: dragStart.origX + dx,
+        y: dragStart.origY + dy
       });
-    } else if (activeAction === 'resize' && selectedId && selectedElement && dragStart && resizeHandle) {
-      const deltaX = e.clientX - dragStart.startX;
-      const deltaY = e.clientY - dragStart.startY;
-      
-      let x = selectedElement.x;
-      let y = selectedElement.y;
-      let w = selectedElement.width;
-      let h = selectedElement.height;
+    } else if (activeAction === 'drag' && selectedId && dragStart) {
+      const dx = (e.clientX - dragStart.startX) / zoom;
+      const dy = (e.clientY - dragStart.startY) / zoom;
+      const el = findElementById(elements, selectedId);
 
-      // Adjust dimensions depending on which handle is dragged
-      if (resizeHandle.includes('r')) {
-        w = Math.max(10, dragStart.origW + deltaX);
-      }
-      if (resizeHandle.includes('b')) {
-        h = Math.max(10, dragStart.origH + deltaY);
-      }
-      if (resizeHandle.includes('l')) {
-        const potentialW = dragStart.origW - deltaX;
-        if (potentialW >= 10) {
-          w = potentialW;
-          x = dragStart.origX + deltaX;
-        }
-      }
-      if (resizeHandle.includes('t')) {
-        const potentialH = dragStart.origH - deltaY;
-        if (potentialH >= 10) {
-          h = potentialH;
-          y = dragStart.origY + deltaY;
-        }
-      }
+      if (el) {
+        const newX = { ...el.x };
+        const newY = { ...el.y };
+        
+        const setResponsive = <T,>(valObj: { base: T; md?: T; lg?: T }, val: T) => {
+          if (viewportMode === 'desktop') valObj.lg = val;
+          else if (viewportMode === 'tablet') valObj.md = val;
+          else valObj.base = val;
+        };
 
-      onUpdateElement(selectedId, { x, y, width: w, height: h });
+        setResponsive(newX, Math.round(dragStart.origX + dx));
+        setResponsive(newY, Math.round(dragStart.origY + dy));
+        updateElement(selectedId, { x: newX, y: newY });
+
+        // Nesting hover target observer
+        const domElements = document.elementsFromPoint(e.clientX, e.clientY);
+        let potentialParentId: string | null = null;
+
+        for (const domEl of domElements) {
+          const pid = domEl.closest('[data-id]')?.getAttribute('data-id');
+          if (pid && pid !== selectedId && pid !== 'canvas-wrapper') {
+            const pNode = findElementById(elements, pid);
+            if (pNode && pNode.type === 'container' && !isDescendant(findElementById(elements, selectedId)!, pid)) {
+              potentialParentId = pid;
+              break;
+            }
+          }
+        }
+        setHoverParentId(potentialParentId);
+      }
+    } else if (activeAction === 'resize' && selectedId && dragStart) {
+      const dx = (e.clientX - dragStart.startX) / zoom;
+      const dy = (e.clientY - dragStart.startY) / zoom;
+      const el = findElementById(elements, selectedId);
+
+      if (el && resizeHandle) {
+        const newX = { ...el.x };
+        const newY = { ...el.y };
+        const newW = { ...el.width };
+        const newH = { ...el.height };
+
+        let w = dragStart.origW;
+        let h = dragStart.origH;
+        let x = dragStart.origX;
+        let y = dragStart.origY;
+
+        if (resizeHandle.includes('r')) w = Math.max(10, dragStart.origW + dx);
+        if (resizeHandle.includes('b')) h = Math.max(10, dragStart.origH + dy);
+        if (resizeHandle.includes('l')) {
+          const pw = dragStart.origW - dx;
+          if (pw >= 10) {
+            w = pw;
+            x = dragStart.origX + dx;
+          }
+        }
+        if (resizeHandle.includes('t')) {
+          const ph = dragStart.origH - dy;
+          if (ph >= 10) {
+            h = ph;
+            y = dragStart.origY + dy;
+          }
+        }
+
+        const setResponsive = <T,>(valObj: { base: T; md?: T; lg?: T }, val: T) => {
+          if (viewportMode === 'desktop') valObj.lg = val;
+          else if (viewportMode === 'tablet') valObj.md = val;
+          else valObj.base = val;
+        };
+
+        setResponsive(newX, Math.round(x));
+        setResponsive(newY, Math.round(y));
+        setResponsive(newW, Math.round(w));
+        setResponsive(newH, Math.round(h));
+
+        updateElement(selectedId, { x: newX, y: newY, width: newW, height: newH });
+      }
     } else if (activeAction === 'draw') {
-      // Add points for custom path drawing
       setDrawPoints((prev) => [...prev, coords]);
     } else if (activeAction === 'create' && createStart && tempCreateElement) {
-      // Dynamic scaling for shape creation
-      const startX = createStart.x;
-      const startY = createStart.y;
-      const currentX = coords.x;
-      const currentY = coords.y;
+      const dx = coords.x - createStart.x;
+      const dy = coords.y - createStart.y;
 
-      const x = Math.min(startX, currentX);
-      const y = Math.min(startY, currentY);
-      const width = Math.max(2, Math.abs(startX - currentX));
-      const height = Math.max(2, Math.abs(startY - currentY));
+      const w = Math.max(2, Math.abs(dx));
+      const h = Math.max(2, Math.abs(dy));
+      const x = Math.min(createStart.x, coords.x);
+      const y = Math.min(createStart.y, coords.y);
 
       setTempCreateElement({
         ...tempCreateElement,
-        x,
-        y,
-        width,
-        height
+        x: { base: Math.round(x) },
+        y: { base: Math.round(y) },
+        width: { base: Math.round(w) },
+        height: { base: Math.round(h) }
       });
     }
   };
 
+  // Pointer Up operations
   const handlePointerUp = (e: React.PointerEvent) => {
     if (!isPointerDown) return;
-    
-    // Release pointer capture
-    if (canvasRef.current) {
-      canvasRef.current.releasePointerCapture(e.pointerId);
-    }
-    
+    if (canvasRef.current) canvasRef.current.releasePointerCapture(e.pointerId);
     setIsPointerDown(false);
 
-    if (activeAction === 'draw' && drawPoints.length > 2) {
-      // Finalize Pen tool path
+    if (activeAction === 'drag' && selectedId && dragStart) {
+      // Finalize drop nesting parent-child transitions
+      const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+        if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+        if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+        return val.base;
+      };
+
+      const el = findElementById(elements, selectedId);
+      if (el) {
+        const dropX = resolve(el.x);
+        const dropY = resolve(el.y);
+        nestElement(selectedId, hoverParentId, dropX, dropY, canvasRef.current);
+      }
+      setHoverParentId(null);
+    } else if (activeAction === 'draw' && drawPoints.length > 2) {
       const xs = drawPoints.map((p) => p.x);
       const ys = drawPoints.map((p) => p.y);
       const minX = Math.min(...xs);
@@ -260,51 +447,62 @@ export const Canvas: React.FC<CanvasProps> = ({
       const minY = Math.min(...ys);
       const maxY = Math.max(...ys);
 
-      const width = Math.max(4, maxX - minX);
-      const height = Math.max(4, maxY - minY);
+      const w = Math.max(4, maxX - minX);
+      const h = Math.max(4, maxY - minY);
 
-      // Normalize coordinates relative to path bounding box
-      const relPoints = drawPoints.map((p) => ({
+      const localPoints = drawPoints.map((p) => ({
         x: p.x - minX,
         y: p.y - minY
       }));
+      const pathData = `M ${localPoints.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')}`;
 
-      // Generate SVG Path data d property
-      const pathData = `M ${relPoints.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' L ')}`;
-
-      const newElement: CanvasElement = {
-        id: `draw-${Date.now()}`,
+      const newPath: ElementType = {
+        id: `path-${Date.now()}`,
         type: 'path',
-        x: minX,
-        y: minY,
-        width,
-        height,
-        fill: 'none',
-        borderWidth: styleSettings.borderWidth > 0 ? styleSettings.borderWidth : 3,
-        borderColor: styleSettings.borderColor,
-        opacity: styleSettings.opacity,
+        x: { base: Math.round(minX) },
+        y: { base: Math.round(minY) },
+        width: { base: Math.round(w) },
+        height: { base: Math.round(h) },
+        position: { base: 'absolute' },
+        styles: {
+          fill: 'transparent',
+          borderColor: styleSettings.borderColor,
+          borderWidth: styleSettings.borderWidth || 3,
+          opacity: styleSettings.opacity,
+          padding: { top: 0, right: 0, bottom: 0, left: 0 },
+          margin: { top: 0, right: 0, bottom: 0, left: 0 }
+        },
         pathData
       };
-
-      onAddElement(newElement);
-      setSelectedId(newElement.id);
-      setActiveTool('select'); // Automatically toggle back to selection tool
-    } else if (activeAction === 'create' && tempCreateElement) {
-      // Place shape onto canvas
-      // If width or height are extremely tiny (accidental clicks), place a default size
-      const isTiny = tempCreateElement.width <= 5 || tempCreateElement.height <= 5;
       
-      const newElement: CanvasElement = {
-        ...tempCreateElement,
-        id: `${tempCreateElement.type}-${Date.now()}`,
-        width: isTiny ? 120 : tempCreateElement.width,
-        height: isTiny ? 120 : tempCreateElement.height,
-        x: isTiny ? tempCreateElement.x - 60 : tempCreateElement.x,
-        y: isTiny ? tempCreateElement.y - 60 : tempCreateElement.y
+      addElement(newPath);
+      setSelectedId(newPath.id);
+      setActiveTool('select');
+    } else if (activeAction === 'create' && tempCreateElement) {
+      const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+        if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+        if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+        return val.base;
       };
 
-      onAddElement(newElement);
-      setSelectedId(newElement.id);
+      const w = resolve(tempCreateElement.width) as number;
+      const h = resolve(tempCreateElement.height) as number;
+      const isTiny = w <= 5 || h <= 5;
+
+      const finalX = isTiny ? resolve(tempCreateElement.x) - 60 : resolve(tempCreateElement.x);
+      const finalY = isTiny ? resolve(tempCreateElement.y) - 60 : resolve(tempCreateElement.y);
+
+      const newEl: ElementType = {
+        ...tempCreateElement,
+        id: `${tempCreateElement.type}-${Date.now()}`,
+        width: { base: isTiny ? 120 : w },
+        height: { base: isTiny ? 120 : h },
+        x: { base: finalX },
+        y: { base: finalY }
+      };
+
+      addElement(newEl);
+      setSelectedId(newEl.id);
       setActiveTool('select');
     }
 
@@ -315,129 +513,90 @@ export const Canvas: React.FC<CanvasProps> = ({
     setActiveAction('none');
   };
 
-  return (
-    <div className="flex-1 h-full flex flex-col bg-slate-950">
-      {/* Canvas Top Bar Info */}
-      <div className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-6 select-none shrink-0">
-        <span className="text-xs font-semibold text-slate-400 tracking-wider">WORKSPACE CANVAS</span>
-        <div className="flex gap-2">
-          {activeTool !== 'select' && (
-            <span className="text-[10px] bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 px-3 py-1 rounded-md font-medium animate-pulse">
-              {activeTool === 'draw' ? '🖋️ Click & Drag to free-draw' : '🎯 Click & Drag to place shape'}
-            </span>
-          )}
-          <span className="text-[10px] bg-slate-800 text-slate-400 px-3 py-1 rounded-md font-medium">
-            {elements.length} {elements.length === 1 ? 'element' : 'elements'}
-          </span>
-        </div>
-      </div>
+  // Viewport simulator dimensions
+  const getViewportWidth = () => {
+    if (viewportMode === 'mobile') return '375px';
+    if (viewportMode === 'tablet') return '768px';
+    return '100%';
+  };
 
-      {/* Interactive Board Wrapper */}
-      <div className="flex-1 relative overflow-hidden bg-slate-950">
+  return (
+    <div
+      ref={workspaceRef}
+      onWheel={handleWheel}
+      className="flex-1 h-full relative overflow-hidden bg-slate-950 flex items-center justify-center p-6 select-none touch-none"
+    >
+      {/* Centered responsive frame viewport wrapper */}
+      <div
+        id="canvas-wrapper"
+        style={{
+          width: getViewportWidth(),
+          maxWidth: '100%',
+          height: '100%',
+          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          transformOrigin: 'center center',
+          transition: activeAction === 'none' ? 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1)' : 'none',
+        }}
+        className="relative bg-slate-900 border border-slate-800 shadow-2xl rounded-2xl flex-shrink-0"
+      >
         <div
           ref={canvasRef}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          className="absolute inset-0 canvas-grid cursor-crosshair select-none touch-none"
-          style={{ cursor: activeTool === 'select' ? 'default' : 'crosshair' }}
+          style={{
+            cursor: activeAction === 'pan' ? 'grabbing' : activeTool === 'select' ? 'default' : 'crosshair'
+          }}
+          className="absolute inset-0 canvas-grid rounded-2xl overflow-hidden select-none"
         >
-          {/* Elements Rendering Loop */}
-          {elements.map((el) => {
-            const isSelected = el.id === selectedId;
-            const elementStyle: React.CSSProperties = {
-              position: 'absolute',
-              left: el.x,
-              top: el.y,
-              width: el.width,
-              height: el.height,
-              opacity: el.opacity,
-              pointerEvents: activeTool === 'select' ? 'auto' : 'none'
-            };
+          {/* Elements list loop */}
+          {elements.map((el) => (
+            <CanvasElement
+              key={el.id}
+              element={el}
+              selectedId={selectedId}
+              viewport={viewportMode}
+              onSelect={handlePointerDown}
+            />
+          ))}
 
-            return (
-              <div
-                key={el.id}
-                data-element-id={el.id}
-                style={elementStyle}
-                className={`transition-shadow duration-100 ${
-                  isSelected && activeTool === 'select' ? 'z-50' : 'z-10'
-                }`}
-              >
-                {/* Rect Rendering */}
-                {el.type === 'rect' && (
-                  <div
-                    className="w-full h-full"
-                    style={{
-                      backgroundColor: el.fill,
-                      border: el.borderWidth > 0 ? `${el.borderWidth}px solid ${el.borderColor}` : 'none',
-                      borderRadius: `${el.borderRadius ?? 0}px`
-                    }}
-                  />
-                )}
+          {/* Hovering container nesting highlight overlay */}
+          {hoverParentId && (
+            <div
+              id={`nest-highlight-${hoverParentId}`}
+              style={{
+                position: 'absolute',
+                pointerEvents: 'none',
+                border: '2px solid #a855f7',
+                backgroundColor: 'rgba(168, 85, 247, 0.08)',
+                zIndex: 35,
+                // Layout resolved coordinates
+                ...(() => {
+                  const node = document.getElementById(hoverParentId);
+                  const canvas = canvasRef.current;
+                  if (node && canvas) {
+                    const r = node.getBoundingClientRect();
+                    const cr = canvas.getBoundingClientRect();
+                    return {
+                      left: (r.left - cr.left) / zoom,
+                      top: (r.top - cr.top) / zoom,
+                      width: r.width / zoom,
+                      height: r.height / zoom
+                    };
+                  }
+                  return { left: 0, top: 0, width: 0, height: 0 };
+                })()
+              }}
+            />
+          )}
 
-                {/* Circle Rendering */}
-                {el.type === 'circle' && (
-                  <div
-                    className="w-full h-full rounded-full"
-                    style={{
-                      backgroundColor: el.fill,
-                      border: el.borderWidth > 0 ? `${el.borderWidth}px solid ${el.borderColor}` : 'none'
-                    }}
-                  />
-                )}
-
-                {/* Triangle Rendering */}
-                {el.type === 'triangle' && (
-                  <svg className="w-full h-full overflow-visible" viewBox="0 0 100 100" preserveAspectRatio="none">
-                    <polygon
-                      points="50,0 100,100 0,100"
-                      fill={el.fill}
-                      stroke={el.borderColor}
-                      strokeWidth={el.borderWidth}
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-
-                {/* Icon Rendering */}
-                {el.type === 'icon' && (
-                  <svg
-                    className="w-full h-full"
-                    style={{ color: el.fill }}
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={el.borderWidth}
-                    strokeLinecap="round"
-                    stroke-linejoin="round"
-                    dangerouslySetInnerHTML={{ __html: ICONS_DATA[el.iconName || 'Star'] || '' }}
-                  />
-                )}
-
-                {/* Drawn Path Rendering */}
-                {el.type === 'path' && (
-                  <svg className="w-full h-full overflow-visible" fill="none">
-                    <path
-                      d={el.pathData}
-                      stroke={el.borderColor}
-                      strokeWidth={el.borderWidth}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </div>
-            );
-          })}
-
-          {/* Render Temporary Custom Path during Drawing */}
+          {/* Freeform pencil SVG overlay */}
           {activeAction === 'draw' && drawPoints.length > 1 && (
-            <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+            <svg className="absolute inset-0 w-full h-full pointer-events-none overflow-visible z-40">
               <path
                 d={`M ${drawPoints.map((p) => `${p.x},${p.y}`).join(' L ')}`}
                 stroke={styleSettings.borderColor}
-                strokeWidth={styleSettings.borderWidth > 0 ? styleSettings.borderWidth : 3}
+                strokeWidth={styleSettings.borderWidth || 3}
                 fill="none"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -446,98 +605,59 @@ export const Canvas: React.FC<CanvasProps> = ({
             </svg>
           )}
 
-          {/* Render Temporary Shape during Creation Drag */}
+          {/* Temporary rectangle creation outline */}
           {activeAction === 'create' && tempCreateElement && (
             <div
               style={{
                 position: 'absolute',
-                left: tempCreateElement.x,
-                top: tempCreateElement.y,
-                width: tempCreateElement.width,
-                height: tempCreateElement.height,
-                opacity: tempCreateElement.opacity,
-                pointerEvents: 'none'
+                left: tempCreateElement.x.base,
+                top: tempCreateElement.y.base,
+                width: tempCreateElement.width.base as number,
+                height: tempCreateElement.height.base as number,
+                pointerEvents: 'none',
+                zIndex: 45
               }}
-            >
-              {tempCreateElement.type === 'rect' && (
-                <div
-                  className="w-full h-full border-2 border-indigo-500/50 bg-indigo-500/20"
-                  style={{ borderRadius: `${tempCreateElement.borderRadius ?? 0}px` }}
-                />
-              )}
-              {tempCreateElement.type === 'circle' && (
-                <div className="w-full h-full rounded-full border-2 border-indigo-500/50 bg-indigo-500/20" />
-              )}
-              {tempCreateElement.type === 'triangle' && (
-                <svg className="w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <polygon
-                    points="50,0 100,100 0,100"
-                    fill="rgba(99, 102, 241, 0.2)"
-                    stroke="rgba(99, 102, 241, 0.5)"
-                    strokeWidth="2"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-            </div>
+              className="border border-dashed border-indigo-500 bg-indigo-500/10 rounded"
+            />
           )}
 
-          {/* Render 8-point Selection Box & Resize Handles */}
-          {selectedElement && activeTool === 'select' && (
+          {/* Concentric Box Model Overlay */}
+          {boxModelActive && selectedId && (() => {
+            const el = findElementById(elements, selectedId);
+            return el ? <BoxModelOverlay element={el} viewport={viewportMode} /> : null;
+          })()}
+
+          {/* Active selection outline & resize anchors */}
+          {selectRect && activeTool === 'select' && (
             <div
               style={{
                 position: 'absolute',
-                left: selectedElement.x,
-                top: selectedElement.y,
-                width: selectedElement.width,
-                height: selectedElement.height,
-                border: '1.5px dashed #6366f1',
+                left: selectRect.x - 1,
+                top: selectRect.y - 1,
+                width: selectRect.w + 2,
+                height: selectRect.h + 2,
+                border: '1.5px solid #6366f1',
                 pointerEvents: 'none',
-                boxSizing: 'border-box'
+                boxSizing: 'border-box',
+                zIndex: 40
               }}
-              className="z-[60]"
             >
-              {/* Selection Border Inner Glow */}
-              <div className="absolute inset-0 border border-indigo-500/20 pointer-events-none" />
-
-              {/* 8 resize handle elements */}
+              <div className="absolute inset-0 border border-indigo-400/20" />
+              
+              {/* Resizing handles */}
               {['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'].map((pos) => {
-                let positionStyle: React.CSSProperties = {};
-                let cursorStyle = 'default';
+                let sStyle: React.CSSProperties = {};
+                let cursor = 'default';
 
                 switch (pos) {
-                  case 'tl':
-                    positionStyle = { top: -5, left: -5 };
-                    cursorStyle = 'nwse-resize';
-                    break;
-                  case 't':
-                    positionStyle = { top: -5, left: 'calc(50% - 5px)' };
-                    cursorStyle = 'ns-resize';
-                    break;
-                  case 'tr':
-                    positionStyle = { top: -5, right: -5 };
-                    cursorStyle = 'nesw-resize';
-                    break;
-                  case 'r':
-                    positionStyle = { top: 'calc(50% - 5px)', right: -5 };
-                    cursorStyle = 'ew-resize';
-                    break;
-                  case 'br':
-                    positionStyle = { bottom: -5, right: -5 };
-                    cursorStyle = 'nwse-resize';
-                    break;
-                  case 'b':
-                    positionStyle = { bottom: -5, left: 'calc(50% - 5px)' };
-                    cursorStyle = 'ns-resize';
-                    break;
-                  case 'bl':
-                    positionStyle = { bottom: -5, left: -5 };
-                    cursorStyle = 'nesw-resize';
-                    break;
-                  case 'l':
-                    positionStyle = { top: 'calc(50% - 5px)', left: -5 };
-                    cursorStyle = 'ew-resize';
-                    break;
+                  case 'tl': sStyle = { top: -4, left: -4 }; cursor = 'nwse-resize'; break;
+                  case 't': sStyle = { top: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
+                  case 'tr': sStyle = { top: -4, right: -4 }; cursor = 'nesw-resize'; break;
+                  case 'r': sStyle = { top: 'calc(50% - 4px)', right: -4 }; cursor = 'ew-resize'; break;
+                  case 'br': sStyle = { bottom: -4, right: -4 }; cursor = 'nwse-resize'; break;
+                  case 'b': sStyle = { bottom: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
+                  case 'bl': sStyle = { bottom: -4, left: -4 }; cursor = 'nesw-resize'; break;
+                  case 'l': sStyle = { top: 'calc(50% - 4px)', left: -4 }; cursor = 'ew-resize'; break;
                 }
 
                 return (
@@ -545,24 +665,33 @@ export const Canvas: React.FC<CanvasProps> = ({
                     key={pos}
                     data-handle={pos}
                     style={{
-                      ...positionStyle,
+                      ...sStyle,
                       position: 'absolute',
-                      width: 10,
-                      height: 10,
+                      width: 8,
+                      height: 8,
                       backgroundColor: '#ffffff',
                       border: '1.5px solid #6366f1',
-                      borderRadius: '2px',
-                      cursor: cursorStyle,
+                      borderRadius: '1px',
+                      cursor,
                       pointerEvents: 'auto'
                     }}
-                    className="shadow-sm hover:bg-indigo-500 hover:scale-125 transition-transform"
+                    className="shadow shadow-indigo-600/30 hover:scale-125 transition-transform"
                   />
                 );
               })}
             </div>
           )}
+
         </div>
       </div>
+
+      {/* Floating coordinates indicator bottom right */}
+      <div className="absolute bottom-4 right-4 bg-slate-900/90 border border-slate-800 text-[10px] font-mono text-slate-400 px-3 py-1.5 rounded-lg flex gap-3 shadow-xl backdrop-blur-md z-20">
+        <span>Zoom: {Math.round(zoom * 100)}%</span>
+        <span className="text-slate-700">|</span>
+        <span>Viewport: {viewportMode.toUpperCase()}</span>
+      </div>
+
     </div>
   );
 };
