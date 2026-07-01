@@ -10,7 +10,9 @@ import {
   Compass,
   AlignJustify,
   Grid,
-  Smile
+  Smile,
+  Spline,
+  Link
 } from 'lucide-react';
 import { useCanvas } from '../context/CanvasContext';
 import { BoxModel } from '../types';
@@ -39,7 +41,9 @@ export const StyleControls: React.FC = () => {
     updateElement,
     deleteElement,
     bringToFront,
-    sendToBack
+    sendToBack,
+    editPathNodes,
+    setEditPathNodes
   } = useCanvas();
 
   const [iconSearchQuery, setIconSearchQuery] = useState('');
@@ -136,6 +140,112 @@ export const StyleControls: React.FC = () => {
       </div>
 
       <div className="p-5 space-y-6 flex-1">
+        {/* Path vertex & loop editor controls */}
+        {['path', 'rect', 'circle', 'triangle'].includes(el.type) && (
+          <div className="space-y-3 bg-slate-950/30 p-3 rounded-xl border border-slate-850">
+            <div className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold">
+              <Spline className="w-3.5 h-3.5 text-purple-400" />
+              <span>Modify Vector Path</span>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => {
+                  if (el.type !== 'path') {
+                    const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+                      if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+                      if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+                      return val.base;
+                    };
+                    const w = resolve(el.width) as number;
+                    const h = resolve(el.height) as number;
+                    
+                    let pathData = '';
+                    if (el.type === 'rect') {
+                      pathData = `M 0.0,0.0 L ${w.toFixed(1)},0.0 L ${w.toFixed(1)},${h.toFixed(1)} L 0.0,${h.toFixed(1)} Z`;
+                    } else if (el.type === 'triangle') {
+                      pathData = `M ${(w/2).toFixed(1)},0.0 L ${w.toFixed(1)},${h.toFixed(1)} L 0.0,${h.toFixed(1)} Z`;
+                    } else if (el.type === 'circle') {
+                      const rx = w / 2;
+                      const ry = h / 2;
+                      const points: string[] = [];
+                      const N = 12;
+                      for (let i = 0; i < N; i++) {
+                        const angle = (i * 2 * Math.PI) / N;
+                        const x = rx + rx * Math.cos(angle);
+                        const y = ry + ry * Math.sin(angle);
+                        points.push(`${i === 0 ? 'M' : 'L'} ${x.toFixed(1)},${y.toFixed(1)}`);
+                      }
+                      pathData = points.join(' ') + ' Z';
+                    }
+                    
+                    updateElement(el.id, {
+                      type: 'path',
+                      pathData,
+                      styles: {
+                        ...el.styles,
+                        borderWidth: el.styles.borderWidth || 2,
+                        borderColor: el.styles.borderColor || '#3b82f6'
+                      }
+                    });
+                    setEditPathNodes(true);
+                  } else {
+                    setEditPathNodes(!editPathNodes);
+                  }
+                }}
+                className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all cursor-pointer ${
+                  el.type !== 'path' ? 'col-span-2' : ''
+                } ${
+                  editPathNodes 
+                    ? 'bg-purple-650/30 border-purple-500 text-purple-300' 
+                    : 'bg-slate-900 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                }`}
+              >
+                <Spline className="w-4 h-4 mb-1 text-purple-400" />
+                <span className="text-[10px] font-semibold">
+                  {el.type !== 'path' 
+                    ? 'Convert to Path & Edit Nodes' 
+                    : editPathNodes ? 'Exit Nodes' : 'Edit Nodes'}
+                </span>
+              </button>
+
+              {el.type === 'path' && (
+                <button
+                  onClick={() => {
+                    const isClosed = /z\s*$/i.test(el.pathData || '');
+                    let newPathData = el.pathData || '';
+                    if (isClosed) {
+                      newPathData = newPathData.replace(/\s*z\s*$/i, '');
+                    } else {
+                      newPathData = newPathData.trim() + ' Z';
+                    }
+                    updateElement(el.id, { pathData: newPathData });
+                  }}
+                  className={`flex flex-col items-center justify-center py-2.5 px-2 rounded-lg border text-center transition-all cursor-pointer ${
+                    /z\s*$/i.test(el.pathData || '')
+                      ? 'bg-emerald-650/30 border-emerald-500 text-emerald-300' 
+                      : 'bg-slate-900 border-slate-850 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                  }`}
+                >
+                  <Link className="w-4 h-4 mb-1 text-emerald-450" />
+                  <span className="text-[10px] font-semibold">
+                    {/z\s*$/i.test(el.pathData || '') ? 'Unbind Ends' : 'Bind Path'}
+                  </span>
+                </button>
+              )}
+            </div>
+            
+            <p className="text-[9px] text-slate-500 leading-normal text-center">
+              {el.type !== 'path'
+                ? 'Convert this geometric shape into an editable vector path with handles.'
+                : editPathNodes 
+                  ? 'Drag the circular purple handles on the canvas to distort the shape edges.' 
+                  : 'Click "Edit Nodes" to reveal vertex handles on the canvas.'
+              }
+            </p>
+          </div>
+        )}
+
         {/* Icon swap picker */}
         {el.type === 'icon' && (
           <div className="space-y-3 bg-slate-950/30 p-3 rounded-xl border border-slate-850">
@@ -365,7 +475,7 @@ export const StyleControls: React.FC = () => {
         </div>
 
         {/* 4. Colors Fill */}
-        {el.type !== 'path' && (
+        {true && (
           <div className="space-y-3 bg-slate-950/30 p-3 rounded-xl border border-slate-850">
             <div className="flex items-center gap-1.5 text-slate-400 text-xs font-semibold">
               <Palette className="w-3.5 h-3.5 text-indigo-400" />

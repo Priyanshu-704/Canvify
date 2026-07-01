@@ -42,6 +42,8 @@ interface CanvasContextType {
   setEditorMode: (mode: 'separate' | 'inline' | 'tailwind') => void;
   setShowEditor: (show: boolean) => void;
   setShowSidebar: (show: boolean) => void;
+  editPathNodes: boolean;
+  setEditPathNodes: (val: boolean) => void;
   
   // Operations
   updateElement: (id: string, updates: Partial<CanvasElement>) => void;
@@ -94,6 +96,11 @@ export const CanvasProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [isValidCode, setIsValidCode] = useState(true);
   const [showEditor, setShowEditor] = useState(true);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [editPathNodes, setEditPathNodes] = useState(false);
+
+  useEffect(() => {
+    setEditPathNodes(false);
+  }, [selectedId]);
 
   // Time Travel State History
   const [history, setHistory] = useState<CanvasElement[][]>([INITIAL_ELEMENTS]);
@@ -524,6 +531,8 @@ export const CanvasProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         showSidebar,
         history,
         historyIndex,
+        editPathNodes,
+        setEditPathNodes,
         
         setSelectedId,
         setActiveTool,

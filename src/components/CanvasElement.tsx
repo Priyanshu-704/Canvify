@@ -137,6 +137,7 @@ export const CanvasElement: React.FC<CanvasElementProps> = ({
         <svg className="w-full h-full overflow-visible" fill="none">
           <path
             d={element.pathData}
+            fill={s.fill || 'none'}
             stroke={s.borderColor}
             strokeWidth={s.borderWidth || 2}
             strokeLinecap="round"

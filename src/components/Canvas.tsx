@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useMemo } from 'react';
 import { useCanvas } from '../context/CanvasContext';
 import { CanvasElement } from './CanvasElement';
 import { BoxModelOverlay } from './BoxModelOverlay';
@@ -21,7 +21,8 @@ export const Canvas: React.FC = () => {
     updateElement,
     addElement,
     deleteElement,
-    nestElement
+    nestElement,
+    editPathNodes
   } = useCanvas();
 
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -38,7 +39,7 @@ export const Canvas: React.FC = () => {
     origH: number;
   } | null>(null);
 
-  const [activeAction, setActiveAction] = useState<'none' | 'drag' | 'resize' | 'create' | 'draw' | 'pan'>('none');
+  const [activeAction, setActiveAction] = useState<'none' | 'drag' | 'resize' | 'create' | 'draw' | 'pan' | 'edit-node'>('none');
   const [resizeHandle, setResizeHandle] = useState<string | null>(null);
   const [drawPoints, setDrawPoints] = useState<{ x: number; y: number }[]>([]);
   const [createStart, setCreateStart] = useState<{ x: number; y: number } | null>(null);
@@ -172,6 +173,29 @@ export const Canvas: React.FC = () => {
     };
   };
 
+  const [activeNodeIndex, setActiveNodeIndex] = useState<number | null>(null);
+
+  const selectedElement = useMemo(() => {
+    return selectedId ? findElementById(elements, selectedId) : null;
+  }, [selectedId, elements]);
+
+  const isPathSelected = selectedElement && selectedElement.type === 'path';
+
+  const pathPoints = useMemo(() => {
+    if (!isPathSelected || !selectedElement.pathData) return [];
+    const pts: { cmd: string; x: number; y: number }[] = [];
+    const regex = /([MLCSTQZA])\s*([0-9.-]+)\s*,\s*([0-9.-]+)/gi;
+    let match;
+    while ((match = regex.exec(selectedElement.pathData)) !== null) {
+      pts.push({
+        cmd: match[1],
+        x: parseFloat(match[2]),
+        y: parseFloat(match[3])
+      });
+    }
+    return pts;
+  }, [selectedElement?.pathData, isPathSelected]);
+
   // Trackpad / Wheel Pan & Zoom Gesture Listener
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
@@ -219,6 +243,13 @@ export const Canvas: React.FC = () => {
     }
 
     if (activeTool === 'select') {
+      const nodeIdxAttr = target.getAttribute('data-node-index');
+      if (nodeIdxAttr !== null && selectedId && isPathSelected) {
+        setActiveAction('edit-node');
+        setActiveNodeIndex(parseInt(nodeIdxAttr));
+        return;
+      }
+
       const handle = target.getAttribute('data-handle');
       if (handle && selectedId) {
         // Start Resize Action
@@ -316,6 +347,31 @@ export const Canvas: React.FC = () => {
         x: dragStart.origX + dx,
         y: dragStart.origY + dy
       });
+    } else if (activeAction === 'edit-node' && selectedId && activeNodeIndex !== null && selectedElement) {
+      const el = selectedElement;
+      const resolve = <T,>(val: { base: T; md?: T; lg?: T }): T => {
+        if (viewportMode === 'desktop' && val.lg !== undefined) return val.lg;
+        if (viewportMode === 'tablet' && val.md !== undefined) return val.md;
+        return val.base;
+      };
+      
+      const elX = resolve(el.x);
+      const elY = resolve(el.y);
+      const localX = coords.x - elX;
+      const localY = coords.y - elY;
+
+      const newPoints = [...pathPoints];
+      if (newPoints[activeNodeIndex]) {
+        newPoints[activeNodeIndex] = {
+          ...newPoints[activeNodeIndex],
+          x: localX,
+          y: localY
+        };
+
+        const isClosed = /z\s*$/i.test(el.pathData || '');
+        const newPathData = newPoints.map(p => `${p.cmd} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ') + (isClosed ? ' Z' : '');
+        updateElement(selectedId, { pathData: newPathData });
+      }
     } else if (activeAction === 'drag' && selectedId && dragStart) {
       const dx = (e.clientX - dragStart.startX) / zoom;
       const dy = (e.clientY - dragStart.startY) / zoom;
@@ -645,40 +701,64 @@ export const Canvas: React.FC = () => {
               <div className="absolute inset-0 border border-indigo-400/20" />
               
               {/* Resizing handles */}
-              {['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'].map((pos) => {
-                let sStyle: React.CSSProperties = {};
-                let cursor = 'default';
+              {!(editPathNodes && isPathSelected) ? (
+                ['tl', 't', 'tr', 'r', 'br', 'b', 'bl', 'l'].map((pos) => {
+                  let sStyle: React.CSSProperties = {};
+                  let cursor = 'default';
 
-                switch (pos) {
-                  case 'tl': sStyle = { top: -4, left: -4 }; cursor = 'nwse-resize'; break;
-                  case 't': sStyle = { top: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
-                  case 'tr': sStyle = { top: -4, right: -4 }; cursor = 'nesw-resize'; break;
-                  case 'r': sStyle = { top: 'calc(50% - 4px)', right: -4 }; cursor = 'ew-resize'; break;
-                  case 'br': sStyle = { bottom: -4, right: -4 }; cursor = 'nwse-resize'; break;
-                  case 'b': sStyle = { bottom: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
-                  case 'bl': sStyle = { bottom: -4, left: -4 }; cursor = 'nesw-resize'; break;
-                  case 'l': sStyle = { top: 'calc(50% - 4px)', left: -4 }; cursor = 'ew-resize'; break;
-                }
+                  switch (pos) {
+                    case 'tl': sStyle = { top: -4, left: -4 }; cursor = 'nwse-resize'; break;
+                    case 't': sStyle = { top: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
+                    case 'tr': sStyle = { top: -4, right: -4 }; cursor = 'nesw-resize'; break;
+                    case 'r': sStyle = { top: 'calc(50% - 4px)', right: -4 }; cursor = 'ew-resize'; break;
+                    case 'br': sStyle = { bottom: -4, right: -4 }; cursor = 'nwse-resize'; break;
+                    case 'b': sStyle = { bottom: -4, left: 'calc(50% - 4px)' }; cursor = 'ns-resize'; break;
+                    case 'bl': sStyle = { bottom: -4, left: -4 }; cursor = 'nesw-resize'; break;
+                    case 'l': sStyle = { top: 'calc(50% - 4px)', left: -4 }; cursor = 'ew-resize'; break;
+                  }
 
-                return (
+                  return (
+                    <div
+                      key={pos}
+                      data-handle={pos}
+                      style={{
+                        ...sStyle,
+                        position: 'absolute',
+                        width: 8,
+                        height: 8,
+                        backgroundColor: '#ffffff',
+                        border: '1.5px solid #6366f1',
+                        borderRadius: '1px',
+                        cursor,
+                        pointerEvents: 'auto'
+                      }}
+                      className="shadow shadow-indigo-600/30 hover:scale-125 transition-transform"
+                    />
+                  );
+                })
+              ) : (
+                /* Vertex edit handles for path */
+                pathPoints.map((pt, idx) => (
                   <div
-                    key={pos}
-                    data-handle={pos}
+                    key={idx}
+                    data-node-index={idx}
                     style={{
-                      ...sStyle,
                       position: 'absolute',
-                      width: 8,
-                      height: 8,
-                      backgroundColor: '#ffffff',
-                      border: '1.5px solid #6366f1',
-                      borderRadius: '1px',
-                      cursor,
-                      pointerEvents: 'auto'
+                      left: pt.x - 5,
+                      top: pt.y - 5,
+                      width: 10,
+                      height: 10,
+                      backgroundColor: activeNodeIndex === idx ? '#a855f7' : '#ffffff',
+                      border: '2px solid #8b5cf6',
+                      borderRadius: '50%',
+                      cursor: 'move',
+                      pointerEvents: 'auto',
+                      zIndex: 50
                     }}
-                    className="shadow shadow-indigo-600/30 hover:scale-125 transition-transform"
+                    className="shadow-md hover:scale-125 transition-transform"
                   />
-                );
-              })}
+                ))
+              )}
             </div>
           )}
 

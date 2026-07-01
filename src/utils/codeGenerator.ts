@@ -219,8 +219,9 @@ ${spaces}  ${paths.trim()}
 ${spaces}</svg>`;
           }
           case 'path': {
+            const fill = el.styles.fill || 'none';
             return `${spaces}<svg id="${el.id}" data-id="${el.id}" data-type="path" class="${twClasses} overflow-visible" fill="none">
-${spaces}  <path d="${el.pathData || ''}" stroke="${el.styles.borderColor}" stroke-width="${el.styles.borderWidth || 2}" stroke-linecap="round" stroke-linejoin="round" />
+${spaces}  <path d="${el.pathData || ''}" fill="${fill}" stroke="${el.styles.borderColor}" stroke-width="${el.styles.borderWidth || 2}" stroke-linecap="round" stroke-linejoin="round" />
 ${spaces}</svg>`;
           }
           default:
@@ -259,8 +260,9 @@ ${spaces}  ${paths.trim()}
 ${spaces}</svg>`;
           }
           case 'path': {
+            const fill = el.styles.fill || 'none';
             return `${spaces}<svg id="${el.id}" data-id="${el.id}" data-type="path" style="${inlineStyle} overflow: visible;" fill="none">
-${spaces}  <path d="${el.pathData || ''}" stroke="${el.styles.borderColor}" stroke-width="${el.styles.borderWidth || 2}" stroke-linecap="round" stroke-linejoin="round" />
+${spaces}  <path d="${el.pathData || ''}" fill="${fill}" stroke="${el.styles.borderColor}" stroke-width="${el.styles.borderWidth || 2}" stroke-linecap="round" stroke-linejoin="round" />
 ${spaces}</svg>`;
           }
           default:

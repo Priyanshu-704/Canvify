@@ -250,6 +250,7 @@ export function parseCode(htmlCode: string, cssCode?: string): CanvasElement[] {
           pathData = pathNode.getAttribute('d') || '';
           styles.borderColor = normalizeColor(pathNode.getAttribute('stroke') || computed.stroke || '#000000');
           styles.borderWidth = parseFloat(pathNode.getAttribute('stroke-width') || computed.strokeWidth || '2');
+          styles.fill = normalizeColor(pathNode.getAttribute('fill') || 'transparent');
         }
       } else if (typeAttr === 'triangle') {
         const polyNode = node.querySelector('polygon');
