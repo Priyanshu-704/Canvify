@@ -59,7 +59,7 @@ export const SimulatorBar: React.FC = () => {
   return (
     <div 
       ref={containerRef} 
-      className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-3 sm:px-4 shrink-0 select-none z-20 gap-2 overflow-hidden w-full"
+      className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-3 sm:px-4 shrink-0 select-none z-20 gap-2 overflow-visible w-full"
     >
       
       {/* 0. Sidebar Collapse/Expand Toggle */}
